@@ -57,26 +57,34 @@ function renderField(data: Record<string, unknown>, key: string, lang: 'en'|'zh'
   return <p>{val}</p>
 }
 
-export default function ReportPage({ params }: { params: { id: string } }) {
+export default function ReportPage({ params }: { params: Promise<{ id: string }> }) {
   const [report, setReport] = useState<Report | null>(null)
   const [lang, setLang] = useState<'en' | 'zh'>('zh')
   const [analyzing, setAnalyzing] = useState(false)
   const [error, setError] = useState('')
+  const [reportId, setReportId] = useState<string>('')
   const supabase = createClient()
 
+  // Next.js 15+: params is a Promise
+  useEffect(() => {
+    params.then(p => setReportId(p.id))
+  }, [params])
+
   async function fetchReport() {
-    const { data } = await supabase.from('founder_reports').select('*').eq('id', params.id).single()
+    if (!reportId) return
+    const { data } = await supabase.from('founder_reports').select('*').eq('id', reportId).single()
     if (data) setReport(data as Report)
   }
 
   async function triggerAnalysis() {
+    if (!reportId) return
     setAnalyzing(true)
     setError('')
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reportId: params.id }),
+        body: JSON.stringify({ reportId }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Analysis failed')
@@ -88,10 +96,11 @@ export default function ReportPage({ params }: { params: { id: string } }) {
   }
 
   useEffect(() => {
+    if (!reportId) return
     fetchReport()
     const interval = setInterval(fetchReport, 3000)
     return () => clearInterval(interval)
-  }, [params.id])
+  }, [reportId])
 
   useEffect(() => {
     if (report && report.status === 'pending' && !analyzing) {
@@ -99,7 +108,7 @@ export default function ReportPage({ params }: { params: { id: string } }) {
     }
   }, [report?.status])
 
-  if (!report) return (
+  if (!reportId || !report) return (
     <div className="dashboard">
       <header className="dash-header"><div className="dash-logo">Founder Intelligence</div></header>
       <main className="dash-main"><div className="loading">加载中...</div></main>
