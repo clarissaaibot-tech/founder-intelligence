@@ -58,15 +58,40 @@ function renderField(data: Record<string, unknown>, key: string, _lang: 'en'|'zh
 
 function SafeRender({ report, lang }: { report: Report; lang: 'en' | 'zh' }) {
   let analysisData: Record<string, unknown> | null = null
+  let parseError = ''
   try {
     const raw = lang === 'en' ? report.analysis_en : report.analysis_zh
-    analysisData = raw ? JSON.parse(raw) : null
-  } catch {
-    analysisData = null
+    if (!raw) {
+      parseError = 'No data'
+    } else if (typeof raw === 'object') {
+      // Already deserialized by supabase-js (JSON column)
+      analysisData = raw as Record<string, unknown>
+    } else if (typeof raw === 'string') {
+      // Try parse string
+      const trimmed = raw.trim()
+      if (!trimmed || trimmed === 'null' || trimmed === 'undefined') {
+        parseError = 'Empty string'
+      } else {
+        analysisData = JSON.parse(trimmed)
+      }
+    }
+  } catch (e: unknown) {
+    parseError = e instanceof Error ? e.message : 'Unknown parse error'
   }
 
   if (!analysisData) {
-    return <div style={{padding: '16px'}}>报告数据格式异常，请重试生成</div>
+    const raw = lang === 'en' ? report.analysis_en : report.analysis_zh
+    const debugInfo = typeof raw === 'string' ? raw.slice(0, 200) : String(raw)
+    return (
+      <div style={{padding: '16px'}}>
+        <strong>报告数据格式异常</strong>
+        <p style={{fontSize:11, color:'#999', margin:'8px 0'}}>Raw: {debugInfo}</p>
+        <p style={{fontSize:11, color:'#999'}}>Error: {parseError}</p>
+        <button onClick={() => window.location.reload()} style={{marginTop:8, padding:'6px 12px', background:'var(--accent)', color:'#000', border:'none', borderRadius:6, cursor:'pointer'}}>
+          刷新重试
+        </button>
+      </div>
+    )
   }
 
   return (

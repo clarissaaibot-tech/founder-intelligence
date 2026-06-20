@@ -146,8 +146,8 @@ function parseJSONResponse(text: string): Record<string, unknown> {
 }
 
 export async function generateAnalysis(report: Record<string, unknown>): Promise<{
-  analysis_en: AnalysisResult
-  analysis_zh: AnalysisResult
+  analysis_en: string
+  analysis_zh: string
 }> {
   // If no social data, use a template
   const hasData = report.x_bio || report.ig_bio || report.x_followers || report.ig_followers
@@ -248,7 +248,8 @@ export async function generateAnalysis(report: Record<string, unknown>): Promise
   }
 
   return {
-    analysis_en: parseJSONResponse(enText) as unknown as AnalysisResult,
-    analysis_zh: parseJSONResponse(zhText) as unknown as AnalysisResult,
+    // Always store as stringified JSON for consistency
+    analysis_en: JSON.stringify(parseJSONResponse(enText)),
+    analysis_zh: JSON.stringify(parseJSONResponse(zhText)),
   }
 }
