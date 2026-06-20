@@ -39,7 +39,7 @@ async function callMiniMax(prompt: string, maxTokens = 4000): Promise<string> {
     const res = await fetch(MINIMAX_API_URL, {
       method: 'POST',
       headers: {
-        'X-Api-Key': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
