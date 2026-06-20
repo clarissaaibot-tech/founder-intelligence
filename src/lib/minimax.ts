@@ -1,7 +1,9 @@
+import { researchFounder, type ResearchData } from './scraper'
+
 const MINIMAX_API_URL = 'https://api.minimax.io/anthropic/v1/messages'
 const MINIMAX_MODEL = 'MiniMax-M2.7'
 
-interface AnalysisResult {
+interface AnalysisSection {
   profile_summary: string
   public_perception: string
   content_pillars: string[]
@@ -12,89 +14,26 @@ interface AnalysisResult {
   priority_moves: string[]
   stage: string
   sources: string[]
-}
-
-function buildPrompt(report: Record<string, unknown>, lang: 'en' | 'zh'): string {
-  const {
-    founder_name = '', company = '', occupation = '', industry = '', location = '',
-    x_handle = '', ig_handle = '', linkedin_url = '', website_url = '',
-    x_followers = null, x_bio = '', ig_followers = null, ig_bio = '',
-  } = report as Record<string, unknown>
-
-  const isZh = lang === 'zh'
-  const name = String(founder_name)
-  const co = String(company)
-  const ind = String(industry)
-  const loc = String(location)
-
-  if (isZh) {
-    return `你是创始人情报分析专家。请基于以下信息，生成一份关于 ${name} 的深度情报报告。
-
-【创始人信息】
-姓名: ${name}
-公司: ${co || '未知'}
-职业: ${occupation || '未知'}
-行业: ${ind || '未知'}
-地点: ${loc || '未知'}
-X/Twitter: ${x_handle || '无'} | 粉丝: ${x_followers ?? '未知'} | Bio: ${x_bio || '无'}
-Instagram: ${ig_handle || '无'} | 粉丝: ${ig_followers ?? '未知'} | Bio: ${ig_bio || '无'}
-LinkedIn: ${linkedin_url || '无'}
-网站: ${website_url || '无'}
-
-请以JSON格式输出，字段如下，全部用中文：
-{
-  "profile_summary": "一段80字以内的简介，描述这位创始人的核心身份和事业",
-  "public_perception": "一句话描述公众/行业对他的认知",
-  "content_pillars": ["内容支柱1", "内容支柱2", "内容支柱3"],
-  "seen_as": "他目前在公众眼中的定位（一句话）",
-  "could_be_known_for": "他可以被认知的更高定位（一句话）",
-  "gap_note": "差距说明——他现在被看到的位置和应该被看到的位置之间的差距（2-3句话）",
-  "conversation_starters": ["对话开场问题1", "对话开场问题2", "对话开场问题3"],
-  "priority_moves": ["优先行动1", "优先行动2", "优先行动3"],
-  "stage": "IP发展阶段：早期探索者/有产品待规模化/已是行业IP/跨界转型中，并说明理由",
-  "sources": ["来源1", "来源2"]
-}
-
-只输出JSON，不要其他文字。JSON必须可以被JSON.parse()解析。`
+  // New detailed fields
+  bio_deep_dive: string
+  audience_profile: { demographics: string; interests: string; pain_points: string }
+  content_themes: { theme: string; frequency: string; engagement: string }[]
+  competitive_positioning: string
+  ip_opportunities: string[]
+  personal_brand_score: { score: number; max: number; breakdown: string }
+  social_reach_analysis: {
+    x_metrics: { followers: number | null; engagement_rate: string; reach_assessment: string }
+    ig_metrics: { followers: number | null; posts: number | null; engagement_rate: string; reach_assessment: string }
   }
-
-  // English
-  return `You are a founder intelligence analyst. Based on the following information, generate a deep intelligence report on ${name}.
-
-[Founder Info]
-Name: ${name}
-Company: ${co || 'Unknown'}
-Occupation: ${occupation || 'Unknown'}
-Industry: ${ind || 'Unknown'}
-Location: ${loc || 'Unknown'}
-X/Twitter: ${x_handle || 'None'} | Followers: ${x_followers ?? 'Unknown'} | Bio: ${x_bio || 'None'}
-Instagram: ${ig_handle || 'None'} | Followers: ${ig_followers ?? 'Unknown'} | Bio: ${ig_bio || 'None'}
-LinkedIn: ${linkedin_url || 'None'}
-Website: ${website_url || 'None'}
-
-Output as JSON only, no other text:
-{
-  "profile_summary": "80-char max description of this founder's core identity and work",
-  "public_perception": "One sentence on how the public/industry perceives them",
-  "content_pillars": ["pillar1", "pillar2", "pillar3"],
-  "seen_as": "Current public positioning (one sentence)",
-  "could_be_known_for": "Higher positioning they could be known for (one sentence)",
-  "gap_note": "Gap explanation — 2-3 sentences on the gap between current and potential positioning",
-  "conversation_starters": ["icebreaker Q1", "icebreaker Q2", "icebreaker Q3"],
-  "priority_moves": ["priority move 1", "priority move 2", "priority move 3"],
-  "stage": "IP stage: Early Explorer / Product-Ready-to-Scale / Industry IP / Cross-Sector Pivot + reasoning",
-  "sources": ["source1", "source2"]
+  web_presence_summary: { mentions: number; sentiment: string; key_articles: string[] }
 }
 
-Only output valid JSON. Must be parseable by JSON.parse().`
-}
-
-async function callMiniMax(prompt: string): Promise<string> {
+async function callMiniMax(prompt: string, maxTokens = 4000): Promise<string> {
   const apiKey = process.env.MINIMAX_API_KEY
   if (!apiKey) throw new Error('MINIMAX_API_KEY not set')
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30000)
+  const timeout = setTimeout(() => controller.abort(), 60000)
 
   try {
     const res = await fetch(MINIMAX_API_URL, {
@@ -105,8 +44,8 @@ async function callMiniMax(prompt: string): Promise<string> {
       },
       body: JSON.stringify({
         model: MINIMAX_MODEL,
-        max_tokens: 2000,
-        temperature: 0.7,
+        max_tokens: maxTokens,
+        temperature: 0.5,
         messages: [{ role: 'user', content: prompt }],
       }),
       signal: controller.signal,
@@ -121,8 +60,7 @@ async function callMiniMax(prompt: string): Promise<string> {
 
     const data = await res.json()
     const textBlock = data.content?.find((c: { type: string }) => c.type === 'text')
-    const text = textBlock?.text || ''
-    return text
+    return textBlock?.text || ''
   } catch (err: unknown) {
     clearTimeout(timeout)
     throw err
@@ -130,14 +68,11 @@ async function callMiniMax(prompt: string): Promise<string> {
 }
 
 function parseJSONResponse(text: string): Record<string, unknown> {
-  // Try direct parse first
   try { return JSON.parse(text) } catch {}
-  // Try extracting JSON from markdown code blocks
   const match = text.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (match) {
     try { return JSON.parse(match[1].trim()) } catch {}
   }
-  // Try finding JSON object
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (jsonMatch) {
     try { return JSON.parse(jsonMatch[0]) } catch {}
@@ -145,110 +80,208 @@ function parseJSONResponse(text: string): Record<string, unknown> {
   throw new Error('Could not parse JSON from response: ' + text.slice(0, 200))
 }
 
+function buildRichPrompt(data: ResearchData, lang: 'en' | 'zh'): string {
+  const { founder_name, company, occupation, industry, location, x_handle, ig_handle, linkedin_url, website_url, x_profile, ig_profile, web_results } = data
+  const isZh = lang === 'zh'
+  const hasX = x_profile && !x_profile.error && x_profile.handle
+  const hasIG = ig_profile && !ig_profile.error && ig_profile.handle
+
+  // Recent tweets for context
+  const recentTweetsText = hasX && x_profile.recent_tweets.length > 0
+    ? x_profile.recent_tweets.map(t => `[${t.date}] ${t.text} | ❤️${t.likes} 🔁${t.retweets}`).join('\n')
+    : '无推文数据'
+
+  // Recent IG posts
+  const recentPostsText = hasIG && ig_profile.recent_posts.length > 0
+    ? ig_profile.recent_posts.map(p => `[${p.date}] ${p.type.toUpperCase()} | ❤️${p.likes ?? '?'} 💬${p.comments ?? '?'} | ${p.caption.slice(0, 150)}`).join('\n')
+    : '无帖子数据'
+
+  // Web search results
+  const webText = web_results.length > 0
+    ? web_results.slice(0, 8).map((r, i) => `[${i + 1}] ${r.title}\n   ${r.snippet}\n   来源: ${r.source}`).join('\n\n')
+    : '无搜索结果'
+
+  // X metrics
+  const xMetrics = hasX
+    ? `  - 账号: @${x_profile.handle}\n  - 名称: ${x_profile.name || '未知'}\n  - Bio: ${x_profile.bio || '无'}\n  - 粉丝: ${x_profile.followers ? x_profile.followers.toLocaleString() : '无法获取'}\n  - 关注: ${x_profile.following ? x_profile.following.toLocaleString() : '无法获取'}\n  -推文数: ${x_profile.tweets ? x_profile.tweets.toLocaleString() : '无法获取'}\n  - 认证: ${x_profile.verified ? '✅ 已认证' : '❌ 未认证'}\n  - 地点: ${x_profile.location || '未公开'}\n  - 网站: ${x_profile.website || '无'}\n  - 最近推文:\n${recentTweetsText}`
+    : `  - 账号: ${x_handle || '未提供'}\n  - 状态: 未抓取到数据`
+
+  // IG metrics
+  const igMetrics = hasIG
+    ? `  - 账号: @${ig_profile.handle}\n  - 名称: ${ig_profile.name || '未知'}\n  - Bio: ${ig_profile.bio || '无'}\n  - 粉丝: ${ig_profile.followers ? ig_profile.followers.toLocaleString() : '无法获取'}\n  - 关注: ${ig_profile.following ? ig_profile.following.toLocaleString() : '无法获取'}\n  - 帖子数: ${ig_profile.posts ? ig_profile.posts.toLocaleString() : '无法获取'}\n  - 认证: ${ig_profile.verified ? '✅ 已认证' : '❌ 未认证'}\n  - 私密: ${ig_profile.is_private ? '🔒 私密账号' : '🌐 公开账号'}\n  - 外部链接: ${ig_profile.external_url || '无'}\n  - 最近帖子:\n${recentPostsText}`
+    : `  - 账号: ${ig_handle || '未提供'}\n  - 状态: 未抓取到数据`
+
+  const langLabel = isZh ? '华文' : 'English'
+  const nothing = isZh ? '无' : 'None'
+  const unknown = isZh ? '未知' : 'Unknown'
+
+  if (isZh) {
+    return `你是资深创始人情报分析专家。请基于以下多维度数据，生成一份**深度个性化**的创始人情报报告。
+
+【创始人基础信息】
+姓名: ${founder_name}
+公司: ${company || '未知'}
+职业: ${occupation || '未知'}
+行业: ${industry || '未知'}
+地点: ${location || '未知'}
+LinkedIn: ${linkedin_url || '无'}
+网站: ${website_url || '无'}
+
+【X/Twitter 详细数据】
+${xMetrics}
+
+【Instagram 详细数据】
+${igMetrics}
+
+【网络搜索结果】
+${webText}
+
+请生成以下JSON格式的分析报告（全部用中文）：
+
+{
+  "profile_summary": "120字以内的个人核心叙事，融合职业背景、个人品牌印象、社交媒体气质",
+  "public_perception": "一句话精准描述公众/行业对他的认知",
+  "bio_deep_dive": "深度解读他的Bio——从措辞风格判断他的个人品牌定位、价值观、目标受众",
+  "audience_profile": {
+    "demographics": "粉丝人口统计：年龄层、职业、地区分布推测",
+    "interests": "粉丝兴趣标签（3-5个关键词）",
+    "pain_points": "他的内容主要解决的粉丝痛点"
+  },
+  "content_pillars": ["他从哪三个角度创作内容（附例子）"],
+  "content_themes": [
+    {"theme": "主题名称", "frequency": "出现频率", "engagement": "互动表现"}
+  ],
+  "seen_as": "他现在在公众眼中的定位（一句话）",
+  "could_be_known_for": "他能被更高认知的定位（一句话，野心但可实现）",
+  "gap_note": "差距说明——他的现状和理想定位之间的GAP（2-3句，要具体指出哪个平台、什么内容不到位）",
+  "competitive_positioning": "他在同类创始人中的竞争定位分析——他跟同赛道其他人有什么差异化的点",
+  "ip_opportunities": ["他还没做但应该做的3个IP机会"],
+  "personal_brand_score": {
+    "score": 数字1-10,
+    "max": 10,
+    "breakdown": "评分理由，从认知度、一致性、差异化、活跃度四个维度评分"
+  },
+  "social_reach_analysis": {
+    "x_metrics": {"followers": 数字或null, "engagement_rate": "高/中/低及原因", "reach_assessment": "他的X影响力评估"},
+    "ig_metrics": {"followers": 数字或null, "posts": 数字或null, "engagement_rate": "高/中/低及原因", "reach_assessment": "他的IG影响力评估"}
+  },
+  "web_presence_summary": {"mentions": 搜索到的结果数量, "sentiment": "正面/中性/混合", "key_articles": ["最重要的3篇文章标题"]},
+  "conversation_starters": ["给他起新外号（1句）", "第一句话开场白（1句）", "深入追问话题（1句）"],
+  "priority_moves": ["第一优先：具体行动（平台+内容形式+频率）", "第二优先：同上", "第三优先：同上"],
+  "stage": "IP发展阶段：早期探索者/有产品待规模化/已是行业IP/跨界转型中，并说明理由",
+  "sources": ["来源链接1", "来源链接2"]
+}
+
+只输出JSON，不要任何其他文字。JSON必须可以被JSON.parse()解析。`
+  }
+
+  // English prompt
+  return `You are a senior founder intelligence analyst. Generate a deeply personalized intelligence report based on comprehensive multi-source data.
+
+[FOUNDER BASICS]
+Name: ${founder_name}
+Company: ${company || 'Unknown'}
+Occupation: ${occupation || 'Unknown'}
+Industry: ${industry || 'Unknown'}
+Location: ${location || 'Unknown'}
+LinkedIn: ${linkedin_url || 'None'}
+Website: ${website_url || 'None'}
+
+[X/TWITTER DETAILED DATA]
+${xMetrics}
+
+[INSTAGRAM DETAILED DATA]
+${igMetrics}
+
+[WEB SEARCH RESULTS]
+${webText}
+
+Generate this JSON report in English:
+
+{
+  "profile_summary": "120-char max personal narrative: blend of career background, personal brand impression, social media persona",
+  "public_perception": "One precise sentence on how the public/industry perceives them",
+  "bio_deep_dive": "Deep dive into their bio — what their word choices, tone, and positioning reveal about their brand, values, and target audience",
+  "audience_profile": {
+    "demographics": "Follower demographics: age range, professions, geographic distribution (inferred)",
+    "interests": "Follower interest tags (3-5 keywords)",
+    "pain_points": "The main follower pain points their content addresses"
+  },
+  "content_pillars": ["The 3 content angles they create from (with examples)"],
+  "content_themes": [
+    {"theme": "Theme name", "frequency": "How often it appears", "engagement": "How it performs"}
+  ],
+  "seen_as": "Current public positioning (one sentence)",
+  "could_be_known_for": "Higher positioning they could credibly claim (one sentence — ambitious but achievable)",
+  "gap_note": "Gap analysis — specific platform and content gaps between where they are and where they should be (2-3 sentences, be concrete)",
+  "competitive_positioning": "Competitive analysis vs. similar founders in their space — what makes them differentiated",
+  "ip_opportunities": ["3 IP opportunities they haven't pursued but should"],
+  "personal_brand_score": {
+    "score": number 1-10,
+    "max": 10,
+    "breakdown": "Reasoned score from 4 dimensions: awareness, consistency, differentiation, activity level"
+  },
+  "social_reach_analysis": {
+    "x_metrics": {"followers": number or null, "engagement_rate": "High/Medium/Low + why", "reach_assessment": "Assessment of their X influence"},
+    "ig_metrics": {"followers": number or null, "posts": number or null, "engagement_rate": "High/Medium/Low + why", "reach_assessment": "Assessment of their IG influence"}
+  },
+  "web_presence_summary": {"mentions": number of search results found, "sentiment": "Positive/Mixed/Neutral", "key_articles": ["Title of 3 most important articles found"]},
+  "conversation_starters": ["Give them a new nickname (1 sentence)", "Opening icebreaker (1 sentence)", "Deep-dive question to ask (1 sentence)"],
+  "priority_moves": ["Priority 1: specific action (platform + content format + frequency)", "Priority 2: same structure", "Priority 3: same structure"],
+  "stage": "IP Stage: Early Explorer / Product-Ready-to-Scale / Industry IP / Cross-Sector Pivot + reasoning",
+  "sources": ["Source URL 1", "Source URL 2"]
+}
+
+Output JSON only. No other text. Must be parseable by JSON.parse().`
+}
+
 export async function generateAnalysis(report: Record<string, unknown>): Promise<{
   analysis_en: string
   analysis_zh: string
 }> {
-  // If no social data, use a template
-  const hasData = report.x_bio || report.ig_bio || report.x_followers || report.ig_followers
+  // Step 1: Run full research pipeline (scrapes X, IG, web search — all in parallel)
+  const researchData = await researchFounder(report)
+
+  // Step 2: Check if we got meaningful data
+  const hasRealData =
+    (researchData.x_profile && !researchData.x_profile.error && researchData.x_profile.followers !== null) ||
+    (researchData.ig_profile && !researchData.ig_profile.error && researchData.ig_profile.followers !== null) ||
+    researchData.web_results.length > 0
 
   let enText = ''
   let zhText = ''
 
-  if (hasData) {
+  if (hasRealData) {
     try {
-      enText = await callMiniMax(buildPrompt(report, 'en'))
-      zhText = await callMiniMax(buildPrompt(report, 'zh'))
+      // Run both languages in parallel
+      ;[enText, zhText] = await Promise.all([
+        callMiniMax(buildRichPrompt(researchData, 'en'), 4000),
+        callMiniMax(buildRichPrompt(researchData, 'zh'), 4000),
+      ])
     } catch (err) {
       console.error('MiniMax call failed:', err)
-      // Fallback to placeholder
-      enText = JSON.stringify({
-        profile_summary: `${report.founder_name} — ${report.occupation || 'Founder'} at ${report.company || 'their company'}.`,
-        public_perception: `A ${report.industry || 'industry'} professional based in ${report.location || 'Southeast Asia'}.`,
-        content_pillars: ['Professional insights', 'Industry commentary', 'Personal brand'],
-        seen_as: `A knowledgeable practitioner in the ${report.industry || 'design'} space.`,
-        could_be_known_for: `A regional thought leader shaping the future of ${report.industry || 'their industry'}.`,
-        gap_note: 'Limited social media presence means the full depth of expertise is not yet visible to potential clients or partners.',
-        conversation_starters: [
-          `What inspired you to start ${report.company || 'your company'}?`,
-          `How do you see the ${report.industry || 'your industry'} evolving in the next 5 years?`,
-          `What does your ideal client relationship look like?`,
-        ],
-        priority_moves: [
-          'Commission an editorial feature to establish thought leadership positioning.',
-          'Build a content strategy around a signature framework or methodology.',
-          'Leverage existing industry judging/award credentials for conference pitches.',
-        ],
-        stage: 'Early Explorer — actively building profile but content strategy not yet systematized.',
-        sources: [report.x_handle ? `X: ${report.x_handle}` : null, report.ig_handle ? `IG: ${report.ig_handle}` : null].filter(Boolean),
-      })
-      zhText = JSON.stringify({
-        profile_summary: `${report.founder_name} — ${report.occupation || '创始人'}，就职于 ${report.company || '某公司'}。`,
-        public_perception: `一位在 ${report.location || '东南亚地区'} 活跃的 ${report.industry || '行业'} 专业人士。`,
-        content_pillars: ['专业洞察', '行业评论', '个人品牌'],
-        seen_as: `${report.industry || '设计'}领域的资深从业者。`,
-        could_be_known_for: `引领 ${report.industry || '行业'} 未来的区域思想领袖。`,
-        gap_note: '社交媒体存在感有限，潜在客户和合作伙伴尚未充分看到其专业深度。',
-        conversation_starters: [
-          `是什么启发您创立 ${report.company || '您的公司'}？`,
-          `您如何看待 ${report.industry || '您的行业'} 在未来5年的发展？`,
-          '您理想的客户关系是什么样的？',
-        ],
-        priority_moves: [
-          '委托编辑专题，建立思想领袖定位。',
-          '围绕独特的框架或方法论建立内容策略。',
-          '利用现有的行业评委/获奖资质进行大会演讲推介。',
-        ],
-        stage: '早期探索者——正在积极建立个人品牌，但内容策略尚未系统化。',
-        sources: [report.x_handle ? `X: ${report.x_handle}` : null, report.ig_handle ? `IG: ${report.ig_handle}` : null].filter(Boolean),
-      })
+      throw new Error(`MiniMax API failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
   } else {
-    // No social data — use fallback
-    enText = JSON.stringify({
-      profile_summary: `${report.founder_name} — ${report.occupation || 'Founder'} at ${report.company || 'their company'}.`,
-      public_perception: `A ${report.industry || 'industry'} professional based in ${report.location || 'Southeast Asia'}.`,
-      content_pillars: ['Professional insights', 'Industry commentary', 'Personal brand'],
-      seen_as: `A knowledgeable practitioner in the ${report.industry || 'design'} space.`,
-      could_be_known_for: `A regional thought leader shaping the future of ${report.industry || 'their industry'}.`,
-      gap_note: 'Social media data not available — recommend manual research before meeting.',
-      conversation_starters: [
-        `What inspired you to start ${report.company || 'your company'}?`,
-        `How do you see the ${report.industry || 'your industry'} evolving?`,
-        `What does your ideal client relationship look like?`,
-      ],
-      priority_moves: [
-        'Request social media handles for pre-meeting research.',
-        'Conduct manual review of publicly available content.',
-        'Identify unique positioning opportunity based on industry context.',
-      ],
-      stage: 'Unknown — insufficient data. Manual research required.',
-      sources: [],
-    })
-    zhText = JSON.stringify({
-      profile_summary: `${report.founder_name} — ${report.occupation || '创始人'}，就职于 ${report.company || '某公司'}。`,
-      public_perception: `一位在 ${report.location || '东南亚地区'} 活跃的 ${report.industry || '行业'} 专业人士。`,
-      content_pillars: ['专业洞察', '行业评论', '个人品牌'],
-      seen_as: `${report.industry || '设计'}领域的资深从业者。`,
-      could_be_known_for: `引领 ${report.industry || '行业'} 未来的区域思想领袖。`,
-      gap_note: '暂无社交媒体数据——建议会面前进行手动调研。',
-      conversation_starters: [
-        `是什么启发您创立 ${report.company || '您的公司'}？`,
-        `您如何看待 ${report.industry || '您的行业'} 的发展？`,
-        '您理想的客户关系是什么样的？',
-      ],
-      priority_moves: [
-        '获取社交媒体账号以便会前研究。',
-        '进行手动公开内容审查。',
-        '根据行业背景确定独特的定位机会。',
-      ],
-      stage: '未知——数据不足，需要手动调研。',
-      sources: [],
-    })
+    // Very little data — still call MiniMax but warn it
+    try {
+      const promptWithWarning = buildRichPrompt(researchData, 'en').replace(
+        '"sources": ["Source URL 1", "Source URL 2"]',
+        '"sources": ["⚠️ Insufficient data — manual research required"]'
+      )
+      enText = await callMiniMax(promptWithWarning, 4000)
+      const zhPrompt = buildRichPrompt(researchData, 'zh').replace(
+        '"sources": ["来源链接1", "来源链接2"]',
+        '"sources": ["⚠️ 数据不足——建议手动调研"]'
+      )
+      zhText = await callMiniMax(zhPrompt, 4000)
+    } catch (err) {
+      console.error('MiniMax call failed:', err)
+      throw new Error(`MiniMax API failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    }
   }
 
   return {
-    // Always store as stringified JSON for consistency
     analysis_en: JSON.stringify(parseJSONResponse(enText)),
     analysis_zh: JSON.stringify(parseJSONResponse(zhText)),
   }
