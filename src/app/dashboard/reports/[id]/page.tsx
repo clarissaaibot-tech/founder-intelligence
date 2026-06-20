@@ -76,6 +76,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
     if (data) setReport(data as Report)
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   async function triggerAnalysis() {
     if (!reportId) return
     setAnalyzing(true)
@@ -103,7 +104,7 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
   }, [reportId])
 
   useEffect(() => {
-    if (report && report.status === 'pending' && !analyzing) {
+    if (report && report.status === 'pending') {
       triggerAnalysis()
     }
   }, [report?.status])
