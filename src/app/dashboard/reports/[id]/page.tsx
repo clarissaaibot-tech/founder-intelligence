@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
@@ -48,13 +48,69 @@ function ReportSection({ title, children, lang }: { title: string; children: Rea
   )
 }
 
-function renderField(data: Record<string, unknown>, key: string, lang: 'en'|'zh') {
-  const val = getField(data, key)
+function renderField(data: Record<string, unknown>, key: string, _lang: 'en'|'zh') {
   if (key === 'content_pillars' || key === 'conversation_starters' || key === 'priority_moves' || key === 'sources') {
     const arr = Array.isArray(data[key]) ? data[key] as string[] : []
     return arr.length > 0 ? arr.map((item, i) => <li key={i}>{item}</li>) : <span className="empty">—</span>
   }
-  return <p>{val}</p>
+  return <p>{getField(data, key)}</p>
+}
+
+function SafeRender({ report, lang }: { report: Report; lang: 'en' | 'zh' }) {
+  let analysisData: Record<string, unknown> | null = null
+  try {
+    const raw = lang === 'en' ? report.analysis_en : report.analysis_zh
+    analysisData = raw ? JSON.parse(raw) : null
+  } catch {
+    analysisData = null
+  }
+
+  if (!analysisData) {
+    return <div style={{padding: '16px'}}>报告数据格式异常，请重试生成</div>
+  }
+
+  return (
+    <>
+      <ReportSection title="Profile Summary" lang={lang}>
+        {renderField(analysisData, 'profile_summary', lang)}
+      </ReportSection>
+      <ReportSection title="Public Perception" lang={lang}>
+        {renderField(analysisData, 'public_perception', lang)}
+      </ReportSection>
+      <ReportSection title="Content Pillars" lang={lang}>
+        <ul>{renderField(analysisData, 'content_pillars', lang)}</ul>
+      </ReportSection>
+      <ReportSection title="Seen As" lang={lang}>
+        {renderField(analysisData, 'seen_as', lang)}
+      </ReportSection>
+      <ReportSection title="Could Be Known For" lang={lang}>
+        {renderField(analysisData, 'could_be_known_for', lang)}
+      </ReportSection>
+      <ReportSection title="Gap Note" lang={lang}>
+        {renderField(analysisData, 'gap_note', lang)}
+      </ReportSection>
+      <ReportSection title="Conversation Starters" lang={lang}>
+        <ul>{renderField(analysisData, 'conversation_starters', lang)}</ul>
+      </ReportSection>
+      <ReportSection title="Priority Moves" lang={lang}>
+        <ul>{renderField(analysisData, 'priority_moves', lang)}</ul>
+      </ReportSection>
+      <ReportSection title="Stage" lang={lang}>
+        {renderField(analysisData, 'stage', lang)}
+      </ReportSection>
+      <ReportSection title="Sources" lang={lang}>
+        <ul>{renderField(analysisData, 'sources', lang)}</ul>
+      </ReportSection>
+      <div className="report-meta">
+        <p>社交媒体: {[
+          report.x_handle && `X: ${report.x_handle}`,
+          report.ig_handle && `IG: ${report.ig_handle}`,
+          report.linkedin_url && `LI: ${report.linkedin_url}`,
+        ].filter(Boolean).join(' | ') || '无'}</p>
+        <p>创建时间: {new Date(report.created_at).toLocaleString('zh-CN')}</p>
+      </div>
+    </>
+  )
 }
 
 export default function ReportPage({ params }: { params: Promise<{ id: string }> }) {
@@ -63,21 +119,31 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
   const [analyzing, setAnalyzing] = useState(false)
   const [error, setError] = useState('')
   const [reportId, setReportId] = useState<string>('')
-  const supabase = createClient()
+  const [initError, setInitError] = useState('')
+
+  // Create supabase client safely inside useEffect to prevent render crash
+  const [supabase, setSupabase] = useState<ReturnType<typeof createClient> | null>(null)
+
+  useEffect(() => {
+    try {
+      setSupabase(createClient())
+    } catch (e) {
+      setInitError('Supabase 客户端初始化失败：环境变量未正确配置')
+    }
+  }, [])
 
   // Next.js 15+: params is a Promise
   useEffect(() => {
     params.then(p => setReportId(p.id))
   }, [params])
 
-  async function fetchReport() {
-    if (!reportId) return
+  const fetchReport = useCallback(async () => {
+    if (!reportId || !supabase) return
     const { data } = await supabase.from('founder_reports').select('*').eq('id', reportId).single()
     if (data) setReport(data as Report)
-  }
+  }, [reportId, supabase])
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  async function triggerAnalysis() {
+  const triggerAnalysis = useCallback(async () => {
     if (!reportId) return
     setAnalyzing(true)
     setError('')
@@ -94,20 +160,29 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
     } finally {
       setAnalyzing(false)
     }
-  }
+  }, [reportId])
 
   useEffect(() => {
-    if (!reportId) return
+    if (!reportId || !supabase) return
     fetchReport()
     const interval = setInterval(fetchReport, 3000)
     return () => clearInterval(interval)
-  }, [reportId])
+  }, [reportId, supabase, fetchReport])
 
   useEffect(() => {
     if (report && report.status === 'pending') {
       triggerAnalysis()
     }
-  }, [report?.status])
+  }, [report?.status, triggerAnalysis])
+
+  if (initError) return (
+    <div className="dashboard">
+      <header className="dash-header"><div className="dash-logo">Founder Intelligence</div></header>
+      <main className="dash-main">
+        <div className="login-error" style={{padding: '16px'}}>{initError}</div>
+      </main>
+    </div>
+  )
 
   if (!reportId || !report) return (
     <div className="dashboard">
@@ -115,10 +190,6 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
       <main className="dash-main"><div className="loading">加载中...</div></main>
     </div>
   )
-
-  const analysisData = lang === 'en'
-    ? (report.analysis_en ? JSON.parse(report.analysis_en) : null)
-    : (report.analysis_zh ? JSON.parse(report.analysis_zh) : null)
 
   return (
     <div className="dashboard">
@@ -157,59 +228,12 @@ export default function ReportPage({ params }: { params: Promise<{ id: string }>
           ) : report.status === 'error' ? (
             <div className="login-error" style={{padding:'16px'}}>
               <strong>分析出错：</strong> {report.error_message || error || '未知错误'}<br/>
-              <button onClick={triggerAnalysis} style={{marginTop:12,padding:'8px 16px',background:'var(--accent)',color:'#000',border:'none',borderRadius:6,cursor:'pointer'}}>
+              <button onClick={() => triggerAnalysis()} style={{marginTop:12,padding:'8px 16px',background:'var(--accent)',color:'#000',border:'none',borderRadius:6,cursor:'pointer'}}>
                 重试
               </button>
             </div>
-          ) : analysisData ? (
-            <div className="report-content">
-              <ReportSection title="Profile Summary" lang={lang}>
-                {renderField(analysisData, 'profile_summary', lang)}
-              </ReportSection>
-              <ReportSection title="Public Perception" lang={lang}>
-                {renderField(analysisData, 'public_perception', lang)}
-              </ReportSection>
-              <ReportSection title="Content Pillars" lang={lang}>
-                <ul>{renderField(analysisData, 'content_pillars', lang)}</ul>
-              </ReportSection>
-              <ReportSection title="Seen As" lang={lang}>
-                {renderField(analysisData, 'seen_as', lang)}
-              </ReportSection>
-              <ReportSection title="Could Be Known For" lang={lang}>
-                {renderField(analysisData, 'could_be_known_for', lang)}
-              </ReportSection>
-              <ReportSection title="Gap Note" lang={lang}>
-                {renderField(analysisData, 'gap_note', lang)}
-              </ReportSection>
-              <ReportSection title="Conversation Starters" lang={lang}>
-                <ul>{renderField(analysisData, 'conversation_starters', lang)}</ul>
-              </ReportSection>
-              <ReportSection title="Priority Moves" lang={lang}>
-                <ul>{renderField(analysisData, 'priority_moves', lang)}</ul>
-              </ReportSection>
-              <ReportSection title="Stage" lang={lang}>
-                {renderField(analysisData, 'stage', lang)}
-              </ReportSection>
-              <ReportSection title="Sources" lang={lang}>
-                <ul>{renderField(analysisData, 'sources', lang)}</ul>
-              </ReportSection>
-
-              <div className="report-meta">
-                <p>社交媒体: {[
-                  report.x_handle && `X: ${report.x_handle}`,
-                  report.ig_handle && `IG: ${report.ig_handle}`,
-                  report.linkedin_url && `LI: ${report.linkedin_url}`,
-                ].filter(Boolean).join(' | ') || '无'}</p>
-                <p>创建时间: {new Date(report.created_at).toLocaleString('zh-CN')}</p>
-              </div>
-            </div>
           ) : (
-            <div className="login-error" style={{padding:'16px'}}>
-              报告数据格式异常，请重试生成
-              <button onClick={triggerAnalysis} style={{marginTop:12,marginLeft:12,padding:'8px 16px',background:'var(--accent)',color:'#000',border:'none',borderRadius:6,cursor:'pointer'}}>
-                重新分析
-              </button>
-            </div>
+            <SafeRender report={report} lang={lang} />
           )}
         </div>
       </main>
