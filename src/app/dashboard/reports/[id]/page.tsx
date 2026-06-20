@@ -49,11 +49,13 @@ function ReportSection({ title, children, lang }: { title: string; children: Rea
 }
 
 function renderField(data: Record<string, unknown>, key: string, _lang: 'en'|'zh') {
+  const val = data[key]
   if (key === 'content_pillars' || key === 'conversation_starters' || key === 'priority_moves' || key === 'sources') {
-    const arr = Array.isArray(data[key]) ? data[key] as string[] : []
-    return arr.length > 0 ? arr.map((item, i) => <li key={i}>{item}</li>) : <span className="empty">—</span>
+    const arr = Array.isArray(val) ? val as string[] : []
+    return arr.length > 0 ? arr.map((item, i) => <li key={i}>{String(item)}</li>) : <span className="empty">—</span>
   }
-  return <p>{getField(data, key)}</p>
+  if (val == null) return <span className="empty">—</span>
+  return <p>{String(val)}</p>
 }
 
 function SafeRender({ report, lang }: { report: Report; lang: 'en' | 'zh' }) {
